@@ -38,7 +38,7 @@ interface
 {$define AutoRegisterjachLogToDisk}
 
 uses
-  UjachLogMgr, System.SyncObjs;
+  UjachLogMgr, System.SyncObjs, ujachLogClasses;
 
 type
   TjachLogToDisk = class(TjachLogWriter)
@@ -54,17 +54,20 @@ type
     FLock: TCriticalSection;
     FMaxFileSize: UInt64;
     FIsMirroredToConsole: Boolean;
+    FMaxLineSize: UInt16;
     procedure SetFileNamePrefix(const Value: string);
     procedure SetFileNameSuffix(const Value: string);
     procedure SetBasePath(const Value: string);
     procedure UpdateLogFileName;
     procedure SetMaxFileSize(const Value: UInt64);
     procedure SetIsMirroredToConsole(const Value: Boolean);
-  protected
+    procedure SetMaxLineSize(const Value: UInt16);
+  public
     procedure OpenLogChannel; override;
     procedure CloseLogChannel; override;
-    procedure Write(ALogType: TLogType; const S, AIndentSpaces: string;
-      const AThreadID: TThreadID; const ADateTime: TDateTime); override;
+    procedure Write(ATopic: TjachLogTopicIndex; ASeverity: TLogSeverity;
+      const S, AIndentSpaces: string; const AThreadID: TThreadID;
+      const ATimeStamp: TDateTime); override;
     procedure RotateLogs;
     function GetLock: TCriticalSection; override;
   public
@@ -74,10 +77,9 @@ type
     property FileNamePrefix: string read FFileNamePrefix write SetFileNamePrefix;
     property FileNameSuffix: string read FFileNameSuffix write SetFileNameSuffix;
     property MaxFileSize: UInt64 read FMaxFileSize write SetMaxFileSize;
+    property MaxLineSize: UInt16 read FMaxLineSize write SetMaxLineSize;
     property IsMirroredToConsole: Boolean read FIsMirroredToConsole write SetIsMirroredToConsole;
   end;
-
-function GetjachDiskLogger: TjachLogToDisk;
 
 implementation
 
@@ -125,6 +127,7 @@ begin
   FLock := TCriticalSection.Create;
   FIsMirroredToConsole := IsConsole;
   FMaxFileSize := 20 * 1024 * 1024; //20MB
+  FMaxLineSize := 255;
   FBasePath := GetDefaultBasePath;
   UpdateLogFileName;
 end;
@@ -223,6 +226,11 @@ begin
   FMaxFileSize := Value;
 end;
 
+procedure TjachLogToDisk.SetMaxLineSize(const Value: UInt16);
+begin
+  FMaxLineSize := Value;
+end;
+
 procedure TjachLogToDisk.UpdateLogFileName;
 var
   Temp: string;
@@ -232,19 +240,20 @@ begin
   FLogFileName := TPath.Combine(FBasePath, Temp);
 end;
 
-procedure TjachLogToDisk.Write(ALogType: TLogType; const S,
-  AIndentSpaces: string; const AThreadID: TThreadID; const ADateTime: TDateTime);
+procedure TjachLogToDisk.Write(ATopic: TjachLogTopicIndex;
+  ASeverity: TLogSeverity; const S, AIndentSpaces: string;
+  const AThreadID: TThreadID; const ATimeStamp: TDateTime);
 var
   DT: string;
   Margin: string;
   Msgs: TStringDynArray;
   I: Integer;
 begin
-  DT := Format('%s %.8x %-5s', [FormatDateTime('yyyy-mm-dd hh:nn:ss:zzz', ADateTime)
+  DT := Format('%s %.8x %-5s', [FormatDateTime('yyyy-mm-dd hh:nn:ss:zzz', ATimeStamp)
     , AThreadID
-    , LogTypeToStr(ALogType)]);
+    , LogSeverityToStr(ASeverity)]);
   Margin := StringOfChar(' ', Length(DT));
-  Msgs := WordWrap(S);
+  Msgs := WordWrap(S, FMaxLineSize);
   Writeln(FLogFile, DT + ' ' + AIndentSpaces + Msgs[0]);
   if IsConsole and FIsMirroredToConsole then
     Writeln(DT + ' ' + AIndentSpaces + Msgs[0]);
@@ -256,20 +265,6 @@ begin
   end;
 end;
 
-var
-  InternalLogger: TjachLogToDisk;
-
-function GetjachDiskLogger: TjachLogToDisk;
-begin
-  Result := InternalLogger;
-end;
-
 initialization
-  {$ifdef AutoRegisterjachLogToDisk}
-    InternalLogger := TjachLogToDisk.Create;
-    TjachLog.RegisterLogger(InternalLogger);
-  {$else}
-    InternalLogger := nil;
-  {$endif}
 finalization
 end.
