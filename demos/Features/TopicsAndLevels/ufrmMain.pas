@@ -1,34 +1,39 @@
-unit Unit3;
+unit ufrmMain;
 
 interface
 
 uses
   Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes, Vcl.Graphics,
-  Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls;
+  Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.ComCtrls;
 
 type
-  TForm3 = class(TForm)
+  TfrmMain = class(TForm)
     cboxLevel: TComboBox;
     Label1: TLabel;
     Button1: TButton;
-    lblPath: TLabel;
     cboxTopic: TComboBox;
     Label2: TLabel;
+    chbxIncludeTopicName: TCheckBox;
+    richDemoText: TRichEdit;
+    Panel1: TPanel;
+    btnOpenLogFolder: TButton;
     procedure FormCreate(Sender: TObject);
     procedure Button1Click(Sender: TObject);
     procedure cboxLevelChange(Sender: TObject);
     procedure cboxTopicClick(Sender: TObject);
+    procedure chbxIncludeTopicNameClick(Sender: TObject);
+    procedure btnOpenLogFolderClick(Sender: TObject);
   private
   public
   end;
 
 var
-  Form3: TForm3;
+  frmMain: TfrmMain;
 
 implementation
 
 uses
-  ujachLogAuto, ujachLogClasses;
+  ujachLogMgr, ujachLogAuto, Winapi.ShellAPI;
 
 {$R *.dfm}
 
@@ -44,7 +49,13 @@ const
 const
   TOPIC_NAMES: array[0..MAX_TOPIC] of string = ('General', 'Transaction', 'Network', 'Security', 'Authorization', 'Environment');
 
-procedure TForm3.Button1Click(Sender: TObject);
+procedure TfrmMain.btnOpenLogFolderClick(Sender: TObject);
+begin
+  ForceDirectories(GetLogDiskWriter.BasePath);
+  Winapi.ShellAPI.ShellExecute(0, 'open', PChar(GetLogDiskWriter.BasePath), nil, nil, SW_SHOWNORMAL)
+end;
+
+procedure TfrmMain.Button1Click(Sender: TObject);
 
   procedure WriteLog(ATopic: TjachLogTopicIndex);
   begin
@@ -73,26 +84,41 @@ begin
     WriteLog(I);
 end;
 
-procedure TForm3.cboxLevelChange(Sender: TObject);
+procedure TfrmMain.cboxLevelChange(Sender: TObject);
 begin
   jachLog.LogLevel[cboxTopic.ItemIndex] := TLogLevel(cboxLevel.ItemIndex);
 end;
 
-procedure TForm3.cboxTopicClick(Sender: TObject);
+procedure TfrmMain.cboxTopicClick(Sender: TObject);
 begin
   cboxLevel.ItemIndex := Integer(jachLog.LogLevel[cboxTopic.ItemIndex]);
 end;
 
-procedure TForm3.FormCreate(Sender: TObject);
+procedure TfrmMain.chbxIncludeTopicNameClick(Sender: TObject);
+begin
+  jachLog.IncludeTopicName := chbxIncludeTopicName.Checked;
+end;
+
+procedure TfrmMain.FormCreate(Sender: TObject);
 var
   I: Integer;
+  strDemoText: TResourceStream;
 begin
   for I := 0 to MAX_TOPIC do
+  begin
     cboxTopic.Items.Add(TOPIC_NAMES[I]);
+    jachLog.TopicName[I] := TOPIC_NAMES[I];
+  end;
   cboxTopic.ItemIndex := 0;
   GetLogDiskWriter.MaxLineSize := 80;
-  lblPath.Caption := 'Log folder: ' + GetLogDiskWriter.BasePath;
+  btnOpenLogFolder.Caption := 'Open log folder: ' + GetLogDiskWriter.BasePath;
   jachLog.LogLevel[cboxTopic.ItemIndex] := TLogLevel(cboxLevel.ItemIndex);
+  strDemoText := TResourceStream.Create(hInstance, 'DemoText', RT_RCDATA);
+  try
+    richDemoText.Lines.LoadFromStream(strDemoText);
+  finally
+    strDemoText.Free;
+  end;
 end;
 
 end.

@@ -32,6 +32,8 @@ type
   private
     FMsgs: TThreadedQueue<TMsg>;
     FActiveThreads: Integer;
+    FMoreMsgs: Boolean;
+    procedure ThreadTerminate(Sender: TObject);
   public
     procedure AddMsg(S: string); overload;
     procedure AddMsg(S: string; Args: array of const); overload;
@@ -42,7 +44,7 @@ type
   private
     FForm: TForm3;
   protected
-    constructor Create(AForm: TForm3);
+    constructor Create(AForm: TForm3; ATerminateMethod: TNotifyEvent);
     procedure Execute; override;
   end;
 
@@ -52,15 +54,16 @@ var
 implementation
 
 uses
-  ujachLogAuto, System.Types;
+  ujachLogMgr, ujachLogAuto, System.Types;
 
 {$R *.dfm}
 
 { TMyThread }
 
-constructor TMyThread.Create(AForm: TForm3);
+constructor TMyThread.Create(AForm: TForm3; ATerminateMethod: TNotifyEvent);
 begin
   FForm := AForm;
+  OnTerminate := ATerminateMethod;
   inherited Create(False);
 end;
 
@@ -79,6 +82,7 @@ begin
       jachLog.LogInfo('Entry %d', [I]);
     jachLog.LogInfo('Ending thread');
     FForm.AddMsg('Ending thread');
+    FForm.FMoreMsgs := True;
   finally
     System.AtomicDecrement(FForm.FActiveThreads);
   end;
@@ -98,25 +102,26 @@ end;
 
 procedure TForm3.Button1Click(Sender: TObject);
 begin
-  TMyThread.Create(Self);
+  TMyThread.Create(Self, ThreadTerminate);
 end;
 
 procedure TForm3.Button2Click(Sender: TObject);
 begin
-  TMyThread.Create(Self);
-  TMyThread.Create(Self);
-  TMyThread.Create(Self);
-  TMyThread.Create(Self);
-  TMyThread.Create(Self);
-  TMyThread.Create(Self);
-  TMyThread.Create(Self);
-  TMyThread.Create(Self);
-  TMyThread.Create(Self);
-  TMyThread.Create(Self);
+  TMyThread.Create(Self, ThreadTerminate);
+  TMyThread.Create(Self, ThreadTerminate);
+  TMyThread.Create(Self, ThreadTerminate);
+  TMyThread.Create(Self, ThreadTerminate);
+  TMyThread.Create(Self, ThreadTerminate);
+  TMyThread.Create(Self, ThreadTerminate);
+  TMyThread.Create(Self, ThreadTerminate);
+  TMyThread.Create(Self, ThreadTerminate);
+  TMyThread.Create(Self, ThreadTerminate);
+  TMyThread.Create(Self, ThreadTerminate);
 end;
 
 procedure TForm3.FormCreate(Sender: TObject);
 begin
+  jachLog.IsCached := True;
   FMsgs := TThreadedQueue<TMsg>.Create(512, 100, 10);
   lblPath.Caption := 'You can find the log in folder: ' + GetLogDiskWriter.BasePath;
 end;
@@ -124,6 +129,17 @@ end;
 procedure TForm3.FormDestroy(Sender: TObject);
 begin
   FMsgs.Free;
+end;
+
+procedure TForm3.ThreadTerminate(Sender: TObject);
+begin
+  if (FActiveThreads = 0) and (FMoreMsgs) then
+  begin
+    FMoreMsgs := False;
+    AddMsg('Writing cached log begin');
+    jachLog.WriteCachedLog;
+    AddMsg('Writing cached log end');
+  end;
 end;
 
 procedure TForm3.Timer1Timer(Sender: TObject);

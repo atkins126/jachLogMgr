@@ -1,9 +1,9 @@
 ﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     <PropertyGroup>
-        <ProjectGuid>{B331D324-C64A-4E05-AD30-6189064F5FF2}</ProjectGuid>
+        <ProjectGuid>{FF512781-4682-4606-AAF0-6EA2468C5C34}</ProjectGuid>
         <ProjectVersion>18.4</ProjectVersion>
         <FrameworkType>VCL</FrameworkType>
-        <MainSource>MultiThreadedCacheDemo.dpr</MainSource>
+        <MainSource>VCLDesktopGUIDemo.dpr</MainSource>
         <Base>True</Base>
         <Config Condition="'$(Config)'==''">Debug</Config>
         <Platform Condition="'$(Platform)'==''">Win32</Platform>
@@ -58,8 +58,8 @@
         <Icon_MainIcon>$(BDS)\bin\delphi_PROJECTICON.ico</Icon_MainIcon>
         <UWP_DelphiLogo44>$(BDS)\bin\Artwork\Windows\UWP\delphi_UwpDefault_44.png</UWP_DelphiLogo44>
         <UWP_DelphiLogo150>$(BDS)\bin\Artwork\Windows\UWP\delphi_UwpDefault_150.png</UWP_DelphiLogo150>
-        <SanitizedProjectName>MultiThreadedCacheDemo</SanitizedProjectName>
-        <DCC_UnitSearchPath>.\..\..\src;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <SanitizedProjectName>VCLDesktopGUIDemo</SanitizedProjectName>
+        <DCC_UnitSearchPath>.\..\..\..\src;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
         <VerInfo_Locale>4106</VerInfo_Locale>
         <VerInfo_Keys>CompanyName=;FileDescription=$(MSBuildProjectName);FileVersion=1.0.0.0;InternalName=;LegalCopyright=;LegalTrademarks=;OriginalFilename=;ProgramID=com.embarcadero.$(MSBuildProjectName);ProductName=$(MSBuildProjectName);ProductVersion=1.0.0.0;Comments=</VerInfo_Keys>
     </PropertyGroup>
@@ -104,10 +104,16 @@
         <DelphiCompile Include="$(MainSource)">
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
-        <DCCReference Include="Unit3.pas">
-            <Form>Form3</Form>
+        <DCCReference Include="ufrmMain.pas">
+            <Form>frmMain</Form>
             <FormType>dfm</FormType>
         </DCCReference>
+        <DCCReference Include="..\..\..\src\ujachLogToVCLRichEdit.pas"/>
+        <RcItem Include="DemoText.rtf">
+            <ContainerId>ResourceItem</ContainerId>
+            <ResourceType>RCDATA</ResourceType>
+            <ResourceId>DemoText</ResourceId>
+        </RcItem>
         <BuildConfiguration Include="Release">
             <Key>Cfg_2</Key>
             <CfgParent>Base</CfgParent>
@@ -126,7 +132,7 @@
         <BorlandProject>
             <Delphi.Personality>
                 <Source>
-                    <Source Name="MainSource">MultiThreadedCacheDemo.dpr</Source>
+                    <Source Name="MainSource">VCLDesktopGUIDemo.dpr</Source>
                 </Source>
                 <Excluded_Packages>
                     <Excluded_Packages Name="$(BDSBIN)\DataExplorerFireDACPlugin250.bpl">FireDAC Data Explorer Integration</Excluded_Packages>
@@ -147,9 +153,15 @@
                 </Excluded_Packages>
             </Delphi.Personality>
             <Deployment Version="3">
-                <DeployFile LocalName="Win32\Debug\MultiThreadedCacheDemo.exe" Configuration="Debug" Class="ProjectOutput">
+                <DeployFile LocalName="Win32\Debug\VCLDesktopGUIDemo.exe" Configuration="Debug" Class="ProjectOutput">
                     <Platform Name="Win32">
-                        <RemoteName>MultiThreadedCacheDemo.exe</RemoteName>
+                        <RemoteName>VCLDesktopGUIDemo.exe</RemoteName>
+                        <Overwrite>true</Overwrite>
+                    </Platform>
+                </DeployFile>
+                <DeployFile LocalName="DemoText.rtf" Configuration="Debug" Class="ProjectFile">
+                    <Platform Name="Win32">
+                        <RemoteDir>.\</RemoteDir>
                         <Overwrite>true</Overwrite>
                     </Platform>
                 </DeployFile>

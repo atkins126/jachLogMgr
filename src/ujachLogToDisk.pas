@@ -1,11 +1,11 @@
 { ******************************************************** }
 { **                                                    ** }
-{ ** Basic multithreaded Log support for Delphi         ** }
+{ ** Multithreaded Log for Delphi                       ** }
 { **                                                    ** }
 { ** Author:                                            ** }
 { **     Juan Antonio Castillo H. (jachguate)           ** }
 { **                                                    ** }
-{ ** Copyright (c) 2007-2021                            ** }
+{ ** Copyright (c) 2007-2022                            ** }
 { **                                                    ** }
 { ** https://github.com/jachguate/jachLogMgr            ** }
 { **                                                    ** }
@@ -31,14 +31,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 }
+
 unit ujachLogToDisk;
 
 interface
 
-{$define AutoRegisterjachLogToDisk}
-
 uses
-  UjachLogMgr, System.SyncObjs, ujachLogClasses;
+  UjachLogMgr, System.SyncObjs;
 
 type
   TjachLogToDisk = class(TjachLogWriter)
@@ -51,16 +50,13 @@ type
     FLogFile: TextFile;
 
     FIsOpen: Boolean;
-    FLock: TCriticalSection;
     FMaxFileSize: UInt64;
-    FIsMirroredToConsole: Boolean;
     FMaxLineSize: UInt16;
     procedure SetFileNamePrefix(const Value: string);
     procedure SetFileNameSuffix(const Value: string);
     procedure SetBasePath(const Value: string);
     procedure UpdateLogFileName;
     procedure SetMaxFileSize(const Value: UInt64);
-    procedure SetIsMirroredToConsole(const Value: Boolean);
     procedure SetMaxLineSize(const Value: UInt16);
   public
     procedure OpenLogChannel; override;
@@ -69,7 +65,6 @@ type
       const S, AIndentSpaces: string; const AThreadID: TThreadID;
       const ATimeStamp: TDateTime); override;
     procedure RotateLogs;
-    function GetLock: TCriticalSection; override;
   public
     constructor Create;
     destructor Destroy; override;
@@ -78,7 +73,6 @@ type
     property FileNameSuffix: string read FFileNameSuffix write SetFileNameSuffix;
     property MaxFileSize: UInt64 read FMaxFileSize write SetMaxFileSize;
     property MaxLineSize: UInt16 read FMaxLineSize write SetMaxLineSize;
-    property IsMirroredToConsole: Boolean read FIsMirroredToConsole write SetIsMirroredToConsole;
   end;
 
 implementation
@@ -124,8 +118,6 @@ end;
 constructor TjachLogToDisk.Create;
 begin
   inherited Create;
-  FLock := TCriticalSection.Create;
-  FIsMirroredToConsole := IsConsole;
   FMaxFileSize := 20 * 1024 * 1024; //20MB
   FMaxLineSize := 255;
   FBasePath := GetDefaultBasePath;
@@ -134,15 +126,9 @@ end;
 
 destructor TjachLogToDisk.Destroy;
 begin
-  FLock.Free;
   if FIsOpen then
     CloseLogChannel;
   inherited;
-end;
-
-function TjachLogToDisk.GetLock: TCriticalSection;
-begin
-  Result := FLock;
 end;
 
 procedure TjachLogToDisk.OpenLogChannel;
@@ -216,11 +202,6 @@ begin
   UpdateLogFileName;
 end;
 
-procedure TjachLogToDisk.SetIsMirroredToConsole(const Value: Boolean);
-begin
-  FIsMirroredToConsole := Value;
-end;
-
 procedure TjachLogToDisk.SetMaxFileSize(const Value: UInt64);
 begin
   FMaxFileSize := Value;
@@ -255,13 +236,9 @@ begin
   Margin := StringOfChar(' ', Length(DT));
   Msgs := WordWrap(S, FMaxLineSize);
   Writeln(FLogFile, DT + ' ' + AIndentSpaces + Msgs[0]);
-  if IsConsole and FIsMirroredToConsole then
-    Writeln(DT + ' ' + AIndentSpaces + Msgs[0]);
   for I := 1 to High(Msgs) do
   begin
     Writeln(FLogFile, Margin + ' ' + AIndentSpaces + Msgs[I]);
-    if IsConsole and FIsMirroredToConsole then
-      Writeln(Margin + ' ' + AIndentSpaces + Msgs[I]);
   end;
 end;
 
