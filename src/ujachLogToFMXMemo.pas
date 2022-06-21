@@ -46,7 +46,7 @@ type
     FEntries: TThreadedQueue<IjachLogEntry>;
     FMemo: TMemo;
     FTimer: TTimer;
-    FMaxLength: Integer;
+    FMaxLineSize: Integer;
     FCurrentLineLength: Integer;
     FDateTimeFormat: string;
     FMessagesAdded: Boolean;
@@ -58,21 +58,25 @@ type
     procedure FreeTimer;
     procedure ActivateTimer;
     function GetIsMainThread: Boolean;
-    procedure SetMaxLength(const Value: Integer);
+    procedure SetMaxLineSize(const Value: Integer);
     procedure SetDateTimeFormat(const Value: string);
+  private
+    procedure InternalWrite(ATopic: TjachLogTopicIndex; ASeverity: TLogSeverity;
+      const S, AIndentSpaces: string; const AThreadID: TThreadID;
+      const ATimeStamp: TDateTime);
   public
     procedure OpenLogChannel; override;
     procedure CloseLogChannel; override;
     procedure WriteEntry(AEntry: IjachLogEntry); override;
     procedure Write(ATopic: TjachLogTopicIndex; ASeverity: TLogSeverity;
-      const S, AIndentSpaces: string; const AThreadID: TThreadID;
-      const ATimeStamp: TDateTime); override;
+      ADebugVerbosity: Byte; const S, AIndentSpaces: string;
+      const AThreadID: TThreadID; const ATimeStamp: TDateTime); override;
   public
-    constructor Create;
+    constructor Create(ADefaultTopicLevel: TLogLevel = llAll); override;
     destructor Destroy; override;
     property Memo: TMemo read FMemo write SeTMemo;
     property RefreshInterval: Cardinal read GetRefreshInterval write SetRefreshInterval;
-    property MaxLength: Integer read FMaxLength write SetMaxLength;
+    property MaxLineSize: Integer read FMaxLineSize write SetMaxLineSize;
     property DateTimeFormat: string read FDateTimeFormat write SetDateTimeFormat;
   end;
 
@@ -105,7 +109,7 @@ end;
 
 constructor TjachLogToFMXMemo.Create;
 begin
-  inherited Create;
+  inherited;
   FEntries := TThreadedQueue<IjachLogEntry>.Create(32768, 0, 0);
   IsActive := False;
   if GetIsMainThread then
@@ -113,7 +117,7 @@ begin
   else
     TThread.Synchronize(TThread.Current, CreateTimer);
   FDateTimeFormat := 'yyyy-mm-dd hh:nn:ss:zzz';
-  FMaxLength := -1;
+  FMaxLineSize := -1;
 end;
 
 procedure TjachLogToFMXMemo.CreateTimer;
@@ -149,6 +153,33 @@ begin
   Result := FTimer.Interval;
 end;
 
+procedure TjachLogToFMXMemo.InternalWrite(ATopic: TjachLogTopicIndex;
+  ASeverity: TLogSeverity; const S, AIndentSpaces: string;
+  const AThreadID: TThreadID; const ATimeStamp: TDateTime);
+var
+  DT, Margin: string;
+  Msgs: TStringDynArray;
+  I, LineLength: Integer;
+begin
+  if not GetIsMainThread then Exit;
+
+  DT := Format('%s %8.8x %-5s %s', [FormatDateTime(FDateTimeFormat, ATimeStamp),
+    AThreadID, LogSeverityToStr(ASeverity), AIndentSpaces]);
+  Margin := StringOfChar(' ', Length(DT) + 1);
+
+  LineLength := FCurrentLineLength - Length(DT);
+
+  if LineLength < 20 then
+    LineLength := 20;
+
+  Msgs := WordWrap(S, LineLength);
+
+  FMemo.Lines.Add(DT + ' ' + Msgs[0]);
+  for I := 1 to High(Msgs) do
+    FMemo.Lines.Add(Margin + Msgs[I]);
+  FMessagesAdded := True;
+end;
+
 procedure TjachLogToFMXMemo.OpenLogChannel;
 begin
   inherited;
@@ -164,10 +195,10 @@ begin
   FDateTimeFormat := Value;
 end;
 
-procedure TjachLogToFMXMemo.SetMaxLength(const Value: Integer);
+procedure TjachLogToFMXMemo.SetMaxLineSize(const Value: Integer);
 begin
-  FMaxLength := Value;
-  FCurrentLineLength := FMaxLength;
+  FMaxLineSize := Value;
+  FCurrentLineLength := FMaxLineSize;
 end;
 
 procedure TjachLogToFMXMemo.SetRefreshInterval(const Value: Cardinal);
@@ -223,18 +254,18 @@ begin
   if not Assigned(FMemo) then
     Exit;
 
-  if FMaxLength = -1 then
+  if FMaxLineSize = -1 then
     CalculateCurrentLength;
 
   FMemo.Lines.BeginUpdate;
   try
-    while FEntries.TotalItemsPushed > FEntries.TotalItemsPopped do
+    while FEntries.QueueSize > 0 do
     begin
       lEntry := FEntries.PopItem;
       if Assigned(lEntry) then
       begin
         IsModified := True;
-        Write(lEntry.Topic, lEntry.Severity, lEntry.LogString, lEntry.Indent, lEntry.ThreadID, lEntry.TimeStamp);
+        InternalWrite(lEntry.Topic, lEntry.Severity, lEntry.LogString, lEntry.Indent, lEntry.ThreadID, lEntry.TimeStamp);
       end;
     end;
   finally
@@ -245,32 +276,12 @@ begin
 end;
 
 procedure TjachLogToFMXMemo.Write(ATopic: TjachLogTopicIndex;
-  ASeverity: TLogSeverity; const S, AIndentSpaces: string;
+  ASeverity: TLogSeverity; ADebugVerbosity: Byte; const S, AIndentSpaces: string;
   const AThreadID: TThreadID; const ATimeStamp: TDateTime);
-
-var
-  DT, Margin: string;
-  Msgs: TStringDynArray;
-  I, LineLength: Integer;
 begin
-  //inherited;
-  if not GetIsMainThread then Exit;
-
-  DT := Format('%s %8.8x %-5s %s', [FormatDateTime(FDateTimeFormat, Now),
-    AThreadID, LogSeverityToStr(ASeverity), AIndentSpaces]);
-  Margin := StringOfChar(' ', Length(DT) + 1);
-
-  LineLength := FCurrentLineLength - Length(DT);
-
-  if LineLength < 20 then
-    LineLength := 20;
-
-  Msgs := WordWrap(S, LineLength);
-
-  FMemo.Lines.Add(DT + ' ' + Msgs[0]);
-  for I := 1 to High(Msgs) do
-    FMemo.Lines.Add(Margin + Msgs[I]);
-  FMessagesAdded := True;
+  case FEntries.PushItem(CreateLogEntry(ATopic, ASeverity, ADebugVerbosity, AIndentSpaces, S, AThreadID, ATimeStamp)) of
+    wrSignaled, wrTimeout, wrAbandoned, wrError, wrIOCompletion: ;
+  end;
 end;
 
 procedure TjachLogToFMXMemo.WriteEntry(AEntry: IjachLogEntry);
@@ -283,5 +294,3 @@ begin
 end;
 
 end.
-
-

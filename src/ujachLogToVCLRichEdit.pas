@@ -50,6 +50,9 @@ type
     FCurrentLineLength: Integer;
     FDateTimeFormat: string;
     FMessagesAdded: Boolean;
+    FAutoCapLineCountThreshold: Integer;
+    FAutoCapLineCountStays: Integer;
+    FMaxMillisecondsAddingMessages: Cardinal;
     procedure SetRichEdit(const Value: TRichEdit);
     procedure TimerEvent(Sender: TObject);
     function GetRefreshInterval: Cardinal;
@@ -64,22 +67,28 @@ type
     procedure SetFontStyle(ASeverity: TLogSeverity; const Value: TFontStyles);
     procedure SetMaxLength(const Value: Integer);
     procedure SetDateTimeFormat(const Value: string);
+    procedure SetAutoCapLineCountStays(const Value: Integer);
+    procedure SetAutoCapLineCountThreshold(const Value: Integer);
+    procedure SetMaxMillisecondsAddingMessages(const Value: Cardinal);
   public
     procedure OpenLogChannel; override;
     procedure CloseLogChannel; override;
     procedure WriteEntry(AEntry: IjachLogEntry); override;
     procedure Write(ATopic: TjachLogTopicIndex; ASeverity: TLogSeverity;
-      const S, AIndentSpaces: string; const AThreadID: TThreadID;
-      const ATimeStamp: TDateTime); override;
+      ADebugVerbosity: Byte; const S, AIndentSpaces: string;
+      const AThreadID: TThreadID; const ATimeStamp: TDateTime); override;
   public
-    constructor Create;
+    constructor Create(ADefaultTopicLevel: TLogLevel = llAll); override;
     destructor Destroy; override;
     property RichEdit: TRichEdit read FRichEdit write SetRichEdit;
     property RefreshInterval: Cardinal read GetRefreshInterval write SetRefreshInterval;
+    property MaxMillisecondsAddingMessages: Cardinal read FMaxMillisecondsAddingMessages write SetMaxMillisecondsAddingMessages;
     property FontColor[ASeverity: TLogSeverity]: TColor read GetFontColor write SetFontColor;
     property FontStyle[ASeverity: TLogSeverity]: TFontStyles read GetFontStyle write SetFontStyle;
     property MaxLength: Integer read FMaxLength write SetMaxLength;
     property DateTimeFormat: string read FDateTimeFormat write SetDateTimeFormat;
+    property AutoCapLineCountThreshold: Integer read FAutoCapLineCountThreshold write SetAutoCapLineCountThreshold;
+    property AutoCapLineCountStays: Integer read FAutoCapLineCountStays write SetAutoCapLineCountStays;
   end;
 
 
@@ -87,7 +96,7 @@ implementation
 
 uses
   System.Types, System.SysUtils, System.Classes, Vcl.Controls, Vcl.Forms,
-  Winapi.Windows;
+  Winapi.Windows, Winapi.Messages;
 
 { TjachLogToVCLRichEdit }
 
@@ -113,7 +122,7 @@ end;
 
 constructor TjachLogToVCLRichEdit.Create;
 begin
-  inherited Create;
+  inherited;
   FEntries := TThreadedQueue<IjachLogEntry>.Create(32768, 0, 0);
   IsActive := False;
   if GetIsMainThread then
@@ -142,6 +151,7 @@ begin
 
   FDateTimeFormat := 'yyyy-mm-dd hh:nn:ss:zzz';
   FMaxLength := -1;
+  FMaxMillisecondsAddingMessages := 300;
 end;
 
 procedure TjachLogToVCLRichEdit.CreateTimer;
@@ -198,6 +208,17 @@ begin
   end;
 end;
 
+procedure TjachLogToVCLRichEdit.SetAutoCapLineCountStays(const Value: Integer);
+begin
+  FAutoCapLineCountStays := Value;
+end;
+
+procedure TjachLogToVCLRichEdit.SetAutoCapLineCountThreshold(
+  const Value: Integer);
+begin
+  FAutoCapLineCountThreshold := Value;
+end;
+
 procedure TjachLogToVCLRichEdit.SetDateTimeFormat(const Value: string);
 begin
   FDateTimeFormat := Value;
@@ -219,6 +240,12 @@ procedure TjachLogToVCLRichEdit.SetMaxLength(const Value: Integer);
 begin
   FMaxLength := Value;
   FCurrentLineLength := FMaxLength;
+end;
+
+procedure TjachLogToVCLRichEdit.SetMaxMillisecondsAddingMessages(
+  const Value: Cardinal);
+begin
+  FMaxMillisecondsAddingMessages := Value;
 end;
 
 procedure TjachLogToVCLRichEdit.SetRefreshInterval(const Value: Cardinal);
@@ -266,43 +293,104 @@ procedure TjachLogToVCLRichEdit.TimerEvent(Sender: TObject);
     FCurrentLineLength := FRichEdit.Width div MeasureFontWidth;
   end;
 
+  procedure CapRichEditContent(var MemorySelStart, MemorySelLength: Integer);
+  var
+    I: Integer;
+    SrcCount, DeleteCount: Integer;
+    DeleteLen: Integer;
+  begin
+    if (FAutoCapLineCountThreshold = 0) then
+      Exit;
+    SrcCount := FRichEdit.Lines.Count;
+    if (SrcCount <= FAutoCapLineCountThreshold) or (SrcCount <= FAutoCapLineCountStays) then
+      Exit;
+    DeleteCount := SrcCount - FAutoCapLineCountStays;
+    DeleteLen := 0;
+    for I := 0 to DeleteCount - 1 do
+      DeleteLen := DeleteLen + Length(FRichEdit.Lines[I]) + 1;
+    if MemorySelStart < DeleteLen then
+    begin
+      MemorySelStart := 0;
+      MemorySelLength := 0;
+    end
+    else
+    begin
+      MemorySelStart := MemorySelStart - DeleteLen;
+    end;
+    FRichEdit.SelStart := 0;
+    FRichEdit.SelLength := DeleteLen;;
+    FRichEdit.SelText := '';
+  end;
 var
   lEntry: IjachLogEntry;
   IsModified: Boolean;
+  WasAtTheEnd: Boolean;
+  WasFocused: Boolean;
+  MemorySelStart, MemorySelLength: Integer;
+  StartTick: UInt64;
 begin
-  IsModified := False;
   if not Assigned(FRichEdit) then
     Exit;
-
-  if FMaxLength = -1 then
-    CalculateCurrentLength;
-
-  FRichEdit.Lines.BeginUpdate;
+  FTimer.Enabled := False;
   try
-    while FEntries.TotalItemsPushed > FEntries.TotalItemsPopped do
+    StartTick := GetTickCount64;
+    IsModified := False;
+    if FEntries.QueueSize > 0 then
     begin
-      lEntry := FEntries.PopItem;
-      if Assigned(lEntry) then
-      begin
-        IsModified := True;
-        Write(lEntry.Topic, lEntry.Severity, lEntry.LogString, lEntry.Indent, lEntry.ThreadID, lEntry.TimeStamp);
+      if FMaxLength = -1 then
+        CalculateCurrentLength;
+      MemorySelStart := FRichEdit.SelStart;
+      MemorySelLength := FRichEdit.SelLength;
+      WasAtTheEnd := MemorySelStart >= (FRichEdit.GetTextLen - FRichEdit.Lines.Count - 1);
+      WasFocused := FRichEdit.Focused;
+      FRichEdit.Lines.BeginUpdate;
+      try
+        if (FAutoCapLineCountThreshold <> 0) and (FEntries.QueueSize > FAutoCapLineCountThreshold) then
+        begin
+          FRichEdit.Lines.Clear;
+          while FEntries.QueueSize > FAutoCapLineCountThreshold do
+          begin
+            FEntries.PopItem;
+            if GetTickCount64 - StartTick > FMaxMillisecondsAddingMessages then Break;
+          end;
+        end;
+
+        if WasFocused then
+          FRichEdit.Perform(WM_KILLFOCUS, 0, 0);
+        while FEntries.QueueSize > 0 do
+        begin
+          if GetTickCount64 - StartTick > FMaxMillisecondsAddingMessages then Break;
+          lEntry := FEntries.PopItem;
+          if Assigned(lEntry) then
+          begin
+            IsModified := True;
+            Write(lEntry.Topic, lEntry.Severity, lEntry.DebugVerbosity, lEntry.LogString, lEntry.Indent, lEntry.ThreadID, lEntry.TimeStamp);
+          end;
+        end;
+        CapRichEditContent(MemorySelStart, MemorySelLength);
+        if WasAtTheEnd then
+          FRichEdit.SelStart := MaxInt
+        else
+        begin
+          FRichEdit.SelStart := MemorySelStart;
+          FRichEdit.SelLength := MemorySelLength;
+        end;
+      finally
+        FRichEdit.Lines.EndUpdate;
       end;
+      if IsModified and WasAtTheEnd then
+        RichEdit.Perform(WM_VSCROLL, SB_BOTTOM, 0);
+      if WasFocused then
+        RichEdit.Perform(WM_SETFOCUS, 0, 0);
     end;
   finally
-    FRichEdit.Lines.EndUpdate;
+    FTimer.Enabled := True;
   end;
-  if IsModified then
-  begin
-    FRichEdit.CaretPos := Point(0, FRichEdit.Lines.Count - 1);
-    FRichEdit.Update;
-  end;
-  //AdjustToTheEnd;
 end;
 
 procedure TjachLogToVCLRichEdit.Write(ATopic: TjachLogTopicIndex;
-  ASeverity: TLogSeverity; const S, AIndentSpaces: string;
+  ASeverity: TLogSeverity; ADebugVerbosity: Byte; const S, AIndentSpaces: string;
   const AThreadID: TThreadID; const ATimeStamp: TDateTime);
-
 var
   DT, Margin: string;
   Msgs: TStringDynArray;
@@ -315,7 +403,7 @@ begin
   FRichEdit.SelAttributes.Color := FFontColor[ASeverity];
   FRichEdit.SelAttributes.Style := FFontStyle[ASeverity];
 
-  DT := Format('%s %8.8x %-5s %s', [FormatDateTime(FDateTimeFormat, Now),
+  DT := Format('%s %8.8x %-5s %s', [FormatDateTime(FDateTimeFormat, ATimeStamp),
     AThreadID, LogSeverityToStr(ASeverity), AIndentSpaces]);
   Margin := StringOfChar(' ', Length(DT));
 
