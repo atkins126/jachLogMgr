@@ -138,8 +138,11 @@ type
     function GetLogLevel(Index: TjachLogTopicIndex): TLogLevel;
     procedure SetLogLevel(Index: TjachLogTopicIndex; const Value: TLogLevel);
     procedure SetDebugVerbosityThreshold(const Value: Byte);
+    procedure SetFriendlyName(const Value: string);
   protected
     const WWMAX_LEN = 255;
+    var
+      FFriendlyName: string;
     function WordWrap(const S: string; MaxLen: UInt16 = WWMAX_LEN): TStringDynArray; virtual;
   public
     constructor Create(ADefaultTopicLevel: TLogLevel = llAll); virtual;
@@ -157,6 +160,7 @@ type
     property Thread: TThread read FThread;
     property LogLevel[Index: TjachLogTopicIndex]: TLogLevel read GetLogLevel write SetLogLevel;
     property DebugVerbosityThreshold: Byte read FDebugVerbosityThreshold write SetDebugVerbosityThreshold;
+    property FriendlyName: string read FFriendlyName write SetFriendlyName;
   end;
 
   TjachLogWriterClass = class of TjachLogWriter;
@@ -367,6 +371,7 @@ type
     {$endif}
     procedure CacheClear;
     procedure WriteCachedLog;
+    procedure GetRegisteredWriters(ARegisteredWriterList: TList<TjachLogWriter>);
   end;
 
   EjachLogError = class(Exception)
@@ -541,6 +546,7 @@ begin
   FLock := TCriticalSection.Create;
   for I := Low(FLogLevel) to High(FLogLevel) do
     FLogLevel[I] := ADefaultTopicLevel;
+  FFriendlyName := Self.ClassName;
 end;
 
 destructor TjachLogWriter.Destroy;
@@ -573,6 +579,11 @@ end;
 procedure TjachLogWriter.SetDebugVerbosityThreshold(const Value: Byte);
 begin
   FDebugVerbosityThreshold := Value;
+end;
+
+procedure TjachLogWriter.SetFriendlyName(const Value: string);
+begin
+  FFriendlyName := Value;
 end;
 
 procedure TjachLogWriter.SetIsActive(const Value: Boolean);
@@ -645,7 +656,7 @@ begin
 
       Start := Start + Length(Result[Idx]) + CharsToIgnore;
       Inc(Idx);
-    until Start >= Length(S);
+    until Start > Length(S);
   end;
 end;
 
@@ -766,6 +777,18 @@ begin
   Result := FindLogWriterByClass(ALogWriterClass);
   if not Assigned(Result) then
     raise EjachLogNoWriterRegistered.CreateFmt('There''s no writer of %s class registered.', [ALogWriterClass.ClassName]);
+end;
+
+procedure TjachLog.GetRegisteredWriters(ARegisteredWriterList: TList<TjachLogWriter>);
+var
+  lRegisteredWriters: TList<TjachLogWriter>;
+begin
+  lRegisteredWriters := FRegisteredLogWriters.LockList;
+  try
+    ARegisteredWriterList.AddRange(lRegisteredWriters.ToArray);
+  finally
+    FRegisteredLogWriters.UnlockList;
+  end;
 end;
 
 function TjachLog.FindLogWriterByClass(
