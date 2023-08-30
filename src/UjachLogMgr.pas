@@ -127,6 +127,8 @@ type
   TjachLogEntryList = class(TList<IjachLogEntry>)
   end;
 
+  TjachLog = class;
+
   TjachLogWriter = class
   private
     FLock: TCriticalSection;
@@ -143,7 +145,12 @@ type
     const WWMAX_LEN = 255;
     var
       FFriendlyName: string;
-    function WordWrap(const S: string; MaxLen: UInt16 = WWMAX_LEN): TStringDynArray; virtual;
+      FLog: TjachLog;
+    procedure InitializeThread; virtual;
+    procedure UninitializeThread; virtual;
+    procedure WriteEntries(AQueue: TThreadedQueue<IjachLogEntry>); virtual;
+  public
+    class function WordWrap(const S: string; MaxLen: UInt16 = WWMAX_LEN): TStringDynArray; virtual;
   public
     constructor Create(ADefaultTopicLevel: TLogLevel = llAll); virtual;
     destructor Destroy; override;
@@ -174,7 +181,6 @@ type
     property EntryList: TjachLogEntryList read FEntryList;
   end;
 
-type
   TjachLog = class
   private
     FCS: TCriticalSection;
@@ -191,6 +197,7 @@ type
     FUseSeparateThreadToWrite: Boolean;
     FWriteThread: TThread;
     FDebugVerbosityThreshold: Byte;
+    FTopicErrorLog: TjachLogTopicIndex;
     function GetExceptionStr(E: Exception): string;
     procedure CacheLog(ATopic: TjachLogTopicIndex; ALogSeverity: TLogSeverity; ADebugVerbosity: Byte; const S: string); inline;
     procedure SetIsCached(const Value: Boolean);
@@ -206,6 +213,7 @@ type
     procedure InternalLog(ATopic: TjachLogTopicIndex; ALogSeverity: TLogSeverity; ADebugVerbosity: Byte; const S: string); overload;
     procedure InternalLog(ATopic: TjachLogTopicIndex; ALogSeverity: TLogSeverity; ADebugVerbosity: Byte; E: Exception); overload; inline;
     procedure InternalLog(ATopic: TjachLogTopicIndex; ALogSeverity: TLogSeverity; ADebugVerbosity: Byte; const ExtraMsg: string; E: Exception); overload; inline;
+    procedure SetTopicErrorLog(const Value: TjachLogTopicIndex);
   public
     constructor Create(ADefaultTopicLevel: TLogLevel = llInfo; ADefaultTopic: TjachLogTopicIndex = 0);
     destructor Destroy; override;
@@ -215,6 +223,7 @@ type
     property LogLevel[Index: TjachLogTopicIndex]: TLogLevel read GetLogLevel write SetLogLevel;
     property TopicName[Index: TjachLogTopicIndex]: string read GetTopicName write SetTopicName;
     property DefaultTopic: TjachLogTopicIndex read FDefaultTopic write FDefaultTopic;
+    property TopicErrorLog: TjachLogTopicIndex read FTopicErrorLog write SetTopicErrorLog;
     property IncludeTopicName: Boolean read FIncludeTopicName write SetIncludeTopicName;
     property IsActive: Boolean read FIsActive write FIsActive;
     property UseSeparateThreadToWrite: Boolean read FUseSeparateThreadToWrite write SetUseSeparateThreadToWrite;
@@ -571,6 +580,11 @@ begin
   Result := FLogLevel[Index];
 end;
 
+procedure TjachLogWriter.InitializeThread;
+begin
+
+end;
+
 procedure TjachLogWriter.OpenLogChannel;
 begin
 
@@ -602,7 +616,12 @@ begin
   FThread := AThread;
 end;
 
-function TjachLogWriter.WordWrap(const S: string;
+procedure TjachLogWriter.UninitializeThread;
+begin
+
+end;
+
+class function TjachLogWriter.WordWrap(const S: string;
   MaxLen: UInt16): TStringDynArray;
 const
   CR = #13;
@@ -657,6 +676,25 @@ begin
       Start := Start + Length(Result[Idx]) + CharsToIgnore;
       Inc(Idx);
     until Start > Length(S);
+  end;
+end;
+
+procedure TjachLogWriter.WriteEntries(AQueue: TThreadedQueue<IjachLogEntry>);
+begin
+  GetLock.Enter;
+  try
+    OpenLogChannel;
+    try
+      while     (not AQueue.ShutDown)
+            and (AQueue.QueueSize > 0) do
+      begin
+        WriteEntry(AQueue.PopItem);
+      end;
+    finally
+      CloseLogChannel;
+    end;
+  finally
+    GetLock.Leave;
   end;
 end;
 
@@ -1646,6 +1684,7 @@ procedure TjachLog.RegisterLogWriter(ALogWriter: TjachLogWriter);
 begin
   FCS.Enter;
   try
+    ALogWriter.FLog := Self;
     FRegisteredLogWriters.Add(ALogWriter);
     if FUseSeparateThreadToWrite then
       ALogWriter.SetWriterThread(TjachLogWriterThread.Create(Self, ALogWriter));
@@ -1673,6 +1712,11 @@ begin
   finally
     FCS.Leave;
   end;
+end;
+
+procedure TjachLog.SetTopicErrorLog(const Value: TjachLogTopicIndex);
+begin
+  FTopicErrorLog := Value;
 end;
 
 procedure TjachLog.SetLogLevel(Index: TjachLogTopicIndex;
@@ -1723,7 +1767,7 @@ begin
       if FUseSeparateThreadToWrite then
       begin
         ALogWriter.FThread.Terminate;
-        ALogWriter.FThread.WaitFor; //todo: check if this is correct
+        ALogWriter.FThread.WaitFor; //todo -ojachguate: check if this is correct
       end;
     finally
       FRegisteredLogWriters.UnlockList;
@@ -1877,11 +1921,12 @@ begin
               if     (not Terminated)
                  and (Writer.IsActive)
                  and (Byte(Writer.LogLevel[AEntry.Topic]) > Byte(AEntry.Severity))
+                 and ((AEntry.Severity <> lsDebug) or (AEntry.DebugVerbosity <= Writer.FDebugVerbosityThreshold))
               then
                 try
                   TjachLogWriterThread(Writer.Thread).FEntryQueue.PushItem(AEntry);
                 except
-                  //todo: fire error event
+                  //todo -ojachguate: fire error event
                   ;
                 end;
           finally
@@ -1947,30 +1992,28 @@ procedure TjachLogWriterThread.Execute;
 begin
   inherited;
   {$ifdef debug}NameThreadForDebugging(FWriter.ClassName + ' writer thread');{$endif}
-  while not Terminated do
-  begin
-    if     (not FEntryQueue.ShutDown)
-       and (FEntryQueue.QueueSize > 0) then
+  FWriter.InitializeThread;
+  try
+    while not Terminated do
     begin
-      FWriter.GetLock.Enter;
       try
-        FWriter.OpenLogChannel;
-        try
-          while     (not Terminated)
-                and (not FEntryQueue.ShutDown)
-                and (FEntryQueue.QueueSize > 0) do
-          begin
-            FWriter.WriteEntry(FEntryQueue.PopItem);
-          end;
-        finally
-          FWriter.CloseLogChannel;
+        if     (not FEntryQueue.ShutDown)
+           and (FEntryQueue.QueueSize > 0) then
+        begin
+          FWriter.WriteEntries(FEntryQueue);
+        end
+        else
+          WaitForSingleObject(FTerminatedEvent.Handle, 50);
+      except
+        on E:Exception do
+        begin
+          FLog.LogError(FLog.FTopicErrorLog, 'Error writing log to ' + FWriter.FriendlyName, E);
+          WaitForSingleObject(FTerminatedEvent.Handle, 100);
         end;
-      finally
-        FWriter.GetLock.Leave;
       end;
-    end
-    else
-      WaitForSingleObject(FTerminatedEvent.Handle, 50);
+    end;
+  finally
+    FWriter.UninitializeThread;
   end;
 end;
 
